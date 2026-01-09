@@ -398,3 +398,4 @@ Since our project is actively being developed, we greatly value your feedback an
 <a href="https://github.com/Cinnamon/kotaemon/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Cinnamon/kotaemon" />
 </a>
+# Chat_bot
