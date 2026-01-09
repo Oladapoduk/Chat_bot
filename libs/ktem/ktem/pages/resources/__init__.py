@@ -19,10 +19,10 @@ class ResourcesTab(BasePage):
         with gr.Tab("Index Collections") as self.index_management_tab:
             self.index_management = IndexManagement(self._app)
 
-        with gr.Tab("LLMs") as self.llm_management_tab:
+        with gr.Tab("LLMs", visible=False) as self.llm_management_tab:
             self.llm_management = LLMManagement(self._app)
 
-        with gr.Tab("Embeddings") as self.emb_management_tab:
+        with gr.Tab("Embeddings", visible=False) as self.emb_management_tab:
             self.emb_management = EmbeddingManagement(self._app)
 
         with gr.Tab("Rerankings") as self.rerank_management_tab:

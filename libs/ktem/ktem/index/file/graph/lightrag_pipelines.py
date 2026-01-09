@@ -27,6 +27,30 @@ from ..pipelines import BaseFileIndexRetriever
 from .pipelines import GraphRAGIndexingPipeline
 from .visualize import create_knowledge_graph, visualize_graph
 
+# Define fallback classes at module level first
+from dataclasses import dataclass
+from typing import Callable as CallableType
+import hashlib
+import json
+
+class EmbeddingFunc:
+    """Fallback EmbeddingFunc class for LightRAG compatibility"""
+
+    def __init__(self, embedding_dim: int, max_token_size: int, func: CallableType):
+        self.embedding_dim = embedding_dim
+        self.max_token_size = max_token_size
+        self.func = func
+
+    async def __call__(self, *args, **kwargs):
+        """Make the EmbeddingFunc callable (async) by delegating to the wrapped func"""
+        return await self.func(*args, **kwargs)
+
+def compute_args_hash(*args):
+    """Fallback compute_args_hash function"""
+    return hashlib.md5(json.dumps(str(args)).encode()).hexdigest()
+
+# Now try to import from LightRAG (will override fallbacks if successful)
+LIGHTRAG_AVAILABLE = False
 try:
     from lightrag import LightRAG, QueryParam
 
@@ -36,14 +60,32 @@ try:
         _find_most_related_edges_from_entities,
         _find_most_related_text_unit_from_entities,
     )
-    from lightrag.utils import EmbeddingFunc, compute_args_hash
 
-except ImportError:
+    # Try to import EmbeddingFunc from different possible locations
+    try:
+        from lightrag.utils import EmbeddingFunc, compute_args_hash
+        print("LightRAG: Successfully imported EmbeddingFunc from lightrag.utils")
+    except (ImportError, AttributeError) as e1:
+        print(f"LightRAG: Could not import from lightrag.utils: {e1}")
+        # For older versions of lightrag-hku, try alternative import
+        try:
+            from lightrag.base import EmbeddingFunc
+            from lightrag.utils import compute_args_hash
+            print("LightRAG: Successfully imported EmbeddingFunc from lightrag.base")
+        except (ImportError, AttributeError) as e2:
+            # Use the fallback class defined above
+            print(f"LightRAG: Could not import from lightrag.base: {e2}")
+            print("LightRAG: Using fallback EmbeddingFunc class (defined at module level)")
+
+    LIGHTRAG_AVAILABLE = True
+
+except ImportError as e:
     print(
         (
-            "LightRAG dependencies not installed. "
-            "Try `pip install git+https://github.com/HKUDS/LightRAG.git` to install. "
-            "LighthRAG retriever pipeline will not work properly."
+            f"LightRAG dependencies not installed: {e}. "
+            "Try `pip install lightrag-hku` to install. "
+            "LightRAG retriever pipeline will not work properly. "
+            "Using fallback EmbeddingFunc class."
         )
     )
 
@@ -240,8 +282,22 @@ def build_graphrag(working_dir, llm_func, embedding_func):
     )
 
     # newer versions of LightRAG needs to be initialized before using
-    asyncio.run(graphrag_func.initialize_storages())
-    asyncio.run(initialize_pipeline_status())
+    # Check if methods exist before calling (for compatibility with older versions)
+    try:
+        if hasattr(graphrag_func, 'initialize_storages'):
+            asyncio.run(graphrag_func.initialize_storages())
+            print("LightRAG: Initialized storages successfully")
+        else:
+            print("LightRAG: initialize_storages method not found (using older version)")
+
+        if 'initialize_pipeline_status' in globals():
+            asyncio.run(initialize_pipeline_status())
+            print("LightRAG: Initialized pipeline status successfully")
+        else:
+            print("LightRAG: initialize_pipeline_status not available (using older version)")
+    except Exception as e:
+        print(f"LightRAG: Warning during initialization: {e}")
+        print("LightRAG: Continuing without initialization (may work with older versions)")
 
     return graphrag_func
 

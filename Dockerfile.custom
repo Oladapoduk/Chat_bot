@@ -1,0 +1,20 @@
+# Custom Dockerfile extending the official Kotaemon image with NanoGraphRAG and LightRAG
+FROM ghcr.io/cinnamon/kotaemon:main-full
+
+# Set working directory
+WORKDIR /app
+
+# Install NanoGraphRAG with fix for version conflicts
+RUN pip install nano-graphrag && \
+    pip uninstall -y hnswlib chroma-hnswlib && \
+    pip install chroma-hnswlib
+
+# LightRAG is already installed in the base image with the correct version (lightrag-hku<=1.3.0)
+# No need to reinstall it
+
+# Set environment variables for both GraphRAG implementations
+ENV USE_NANO_GRAPHRAG=true
+ENV USE_LIGHTRAG=true
+
+# Entry point (inherited from base image)
+ENTRYPOINT ["sh", "/app/launch.sh"]
