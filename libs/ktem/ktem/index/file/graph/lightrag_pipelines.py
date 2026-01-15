@@ -33,13 +33,12 @@ from typing import Callable as CallableType
 import hashlib
 import json
 
+@dataclass
 class EmbeddingFunc:
     """Fallback EmbeddingFunc class for LightRAG compatibility"""
-
-    def __init__(self, embedding_dim: int, max_token_size: int, func: CallableType):
-        self.embedding_dim = embedding_dim
-        self.max_token_size = max_token_size
-        self.func = func
+    embedding_dim: int
+    max_token_size: int
+    func: CallableType
 
     async def __call__(self, *args, **kwargs):
         """Make the EmbeddingFunc callable (async) by delegating to the wrapped func"""
@@ -58,7 +57,7 @@ try:
     from lightrag.kg.shared_storage import initialize_pipeline_status
     from lightrag.operate import (
         _find_most_related_edges_from_entities,
-        _find_most_related_text_unit_from_entities,
+        _find_related_text_unit_from_entities,
     )
 
     # Try to import EmbeddingFunc from different possible locations
@@ -88,6 +87,8 @@ except ImportError as e:
             "Using fallback EmbeddingFunc class."
         )
     )
+    import traceback
+    traceback.print_exc()
 
 
 logging.getLogger("lightrag").setLevel(logging.INFO)
@@ -218,7 +219,7 @@ async def lightrag_build_local_query_context(
     ]
 
     try:
-        use_text_units = await _find_most_related_text_unit_from_entities(
+        use_text_units = await _find_related_text_unit_from_entities(
             node_datas, query_param, text_chunks_db, knowledge_graph_inst
         )
     except Exception:
@@ -280,25 +281,7 @@ def build_graphrag(working_dir, llm_func, embedding_func):
         llm_model_func=llm_func,
         embedding_func=embedding_func,
     )
-
-    # newer versions of LightRAG needs to be initialized before using
-    # Check if methods exist before calling (for compatibility with older versions)
-    try:
-        if hasattr(graphrag_func, 'initialize_storages'):
-            asyncio.run(graphrag_func.initialize_storages())
-            print("LightRAG: Initialized storages successfully")
-        else:
-            print("LightRAG: initialize_storages method not found (using older version)")
-
-        if 'initialize_pipeline_status' in globals():
-            asyncio.run(initialize_pipeline_status())
-            print("LightRAG: Initialized pipeline status successfully")
-        else:
-            print("LightRAG: initialize_pipeline_status not available (using older version)")
-    except Exception as e:
-        print(f"LightRAG: Warning during initialization: {e}")
-        print("LightRAG: Continuing without initialization (may work with older versions)")
-
+    # Initialization is now deferred to the caller to ensure it happens in the correct event loop
     return graphrag_func
 
 
@@ -420,13 +403,6 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
             for json_file in json_files:
                 os.remove(json_file)
 
-        # Initialize or load existing GraphRAG
-        graphrag_func = build_graphrag(
-            input_path,
-            llm_func=llm_func,
-            embedding_func=embedding_func,
-        )
-
         total_docs = len(all_docs)
         process_doc_count = 0
         yield Document(
@@ -437,20 +413,43 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
             ),
         )
 
-        for doc_id in range(0, len(all_docs), self.index_batch_size):
-            cur_docs = all_docs[doc_id : doc_id + self.index_batch_size]
-            combined_doc = "\n".join(cur_docs)
+        # Initialize GraphRAG and run insert in a persistent loop to handle locks correctly
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            # Create and initialize GraphRAG inside the loop
+            async def init_graphrag():
+                g = build_graphrag(
+                    input_path,
+                    llm_func=llm_func,
+                    embedding_func=embedding_func,
+                )
+                if hasattr(g, 'initialize_storages'):
+                    await g.initialize_storages()
+                if 'initialize_pipeline_status' in globals():
+                    await initialize_pipeline_status()
+                return g
+                
+            graphrag_func = loop.run_until_complete(init_graphrag())
 
-            # Use insert for incremental updates
-            graphrag_func.insert(combined_doc)
-            process_doc_count += len(cur_docs)
-            yield Document(
-                channel="debug",
-                text=(
-                    f"[GraphRAG] {'Updated' if is_incremental else 'Indexed'} "
-                    f"{process_doc_count} / {total_docs} documents."
-                ),
-            )
+            for doc_id in range(0, len(all_docs), self.index_batch_size):
+                cur_docs = all_docs[doc_id : doc_id + self.index_batch_size]
+                combined_doc = "\n".join(cur_docs)
+
+                # Use ainsert (async) to keep using the same loop and locks
+                loop.run_until_complete(graphrag_func.ainsert(combined_doc))
+                
+                process_doc_count += len(cur_docs)
+                yield Document(
+                    channel="debug",
+                    text=(
+                        f"[GraphRAG] {'Updated' if is_incremental else 'Indexed'} "
+                        f"{process_doc_count} / {total_docs} documents."
+                    ),
+                )
+        finally:
+            loop.close()
 
         yield Document(
             channel="debug",
@@ -488,7 +487,7 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
             }
         }
 
-    def _build_graph_search(self):
+    def _get_graph_id(self):
         file_id = self.file_ids[0]
 
         # retrieve the graph_id from the index
@@ -501,20 +500,8 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
             )
             graph_id = graph_id[0] if graph_id else None
             assert graph_id, f"GraphRAG index not found for file_id: {file_id}"
-
-        _, input_path = prepare_graph_index_path(graph_id)
-        input_path.mkdir(parents=True, exist_ok=True)
-
-        llm_func, embedding_func, _, _ = get_default_models_wrapper()
-        graphrag_func = build_graphrag(
-            input_path,
-            llm_func=llm_func,
-            embedding_func=embedding_func,
-        )
-        print("search_type", self.search_type)
-        query_params = QueryParam(mode=self.search_type, only_need_context=True)
-
-        return graphrag_func, query_params
+        
+        return graph_id
 
     def _to_document(self, header: str, context_text: str) -> RetrievedDocument:
         return RetrievedDocument(
@@ -534,27 +521,32 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         context: str = ""
 
         # entities current parsing error
-        header = "<b>Entities</b>\n"
-        context = entities[["entity", "description"]].to_markdown(index=False)
-        docs.append(self._to_document(header, context))
+        if entities is not None:
+            header = "<b>Entities</b>\n"
+            context = entities[["entity", "description"]].to_markdown(index=False)
+            docs.append(self._to_document(header, context))
 
-        header = "\n<b>Relationships</b>\n"
-        context = relationships[["source", "target", "description"]].to_markdown(
-            index=False
-        )
-        docs.append(self._to_document(header, context))
+        if relationships is not None:
+            header = "\n<b>Relationships</b>\n"
+            context = relationships[["source", "target", "description"]].to_markdown(
+                index=False
+            )
+            docs.append(self._to_document(header, context))
 
-        header = "\n<b>Sources</b>\n"
-        context = ""
-        for _, row in sources.iterrows():
-            title, content = row["id"], row["content"]
-            context += f"\n\n<h5>Source <b>#{title}</b></h5>\n"
-            context += content
-        docs.append(self._to_document(header, context))
+        if sources is not None:
+            header = "\n<b>Sources</b>\n"
+            context = ""
+            for _, row in sources.iterrows():
+                title, content = row["id"], row["content"]
+                context += f"\n\n<h5>Source <b>#{title}</b></h5>\n"
+                context += content
+            docs.append(self._to_document(header, context))
 
         return docs
 
     def plot_graph(self, relationships):
+        if relationships is None:
+            return None
         G = create_knowledge_graph(relationships)
         plot = visualize_graph(G)
         return plot
@@ -566,41 +558,76 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         if not self.file_ids:
             return []
 
-        graphrag_func, query_params = self._build_graph_search()
+        graph_id = self._get_graph_id()
+        _, input_path = prepare_graph_index_path(graph_id)
+        input_path.mkdir(parents=True, exist_ok=True)
+        
+        llm_func, embedding_func, _, _ = get_default_models_wrapper()
+        
+        query_params = QueryParam(mode=self.search_type, only_need_context=True)
+        print("search_type", self.search_type)
 
-        # only local mode support graph visualization
-        if query_params.mode == "local":
-            entities, relationships, sources = asyncio.run(
-                lightrag_build_local_query_context(graphrag_func, text, query_params)
+        async def _async_run():
+            # Build and initialize GraphRAG inside the async loop
+            graphrag_func = build_graphrag(
+                input_path,
+                llm_func=llm_func,
+                embedding_func=embedding_func,
             )
-            documents = self.format_context_records(entities, relationships, sources)
-            plot = self.plot_graph(relationships)
-            documents += [
-                RetrievedDocument(
-                    text="",
-                    metadata={
-                        "file_name": "GraphRAG",
-                        "type": "plot",
-                        "data": plot,
-                    },
-                ),
-            ]
-        else:
-            context = graphrag_func.query(text, query_params)
-
-            # account for missing ``` for closing code block
-            context += "\n```"
-
-            documents = [
-                RetrievedDocument(
-                    text=context,
-                    metadata={
-                        "file_name": "GraphRAG {} Search".format(
-                            query_params.mode.capitalize()
-                        ),
-                        "type": "table",
-                    },
+            
+            # Initialize storages
+            if hasattr(graphrag_func, 'initialize_storages'):
+                await graphrag_func.initialize_storages()
+            
+            if 'initialize_pipeline_status' in globals():
+                await initialize_pipeline_status()
+                
+            # Perform query
+            if query_params.mode == "local":
+                entities, relationships, sources = await lightrag_build_local_query_context(
+                    graphrag_func, text, query_params
                 )
-            ]
+                documents = self.format_context_records(entities, relationships, sources)
+                plot = self.plot_graph(relationships)
+                documents += [
+                    RetrievedDocument(
+                        text="",
+                        metadata={
+                            "file_name": "GraphRAG",
+                            "type": "plot",
+                            "data": plot,
+                        },
+                    ),
+                ]
+                return documents
+            else:
+                # Use graphrag_func.query (assuming it handles loop or uses async compatible methods)
+                # But since we are in an async loop, calling sync wrapper might be bad if it creates sub-loop.
+                # Use direct internal method if possible or accept overhead?
+                # LightRAG.query usually uses loop.run_until_complete.
+                # If we are already running in a loop, we can't use run_until_complete.
+                # We need to find the async query method.
+                # If unavailable, we might have to use a thread executor.
+                
+                # Try to use internal async query logic if exposed?
+                # Fallback: run in thread to escape loop
+                context = await asyncio.to_thread(graphrag_func.query, text, query_params)
 
-        return documents
+                # account for missing ``` for closing code block
+                context += "\n```"
+
+                documents = [
+                    RetrievedDocument(
+                        text=context,
+                        metadata={
+                            "file_name": "GraphRAG {} Search".format(
+                                query_params.mode.capitalize()
+                            ),
+                            "type": "table",
+                        },
+                    )
+                ]
+                return documents
+
+        # Run the async wrapper
+        return asyncio.run(_async_run())
