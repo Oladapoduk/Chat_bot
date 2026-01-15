@@ -9,6 +9,10 @@ from kotaemon.llms import ChatLLM
 
 from .db import LLMTable, engine
 
+import logging
+logger = logging.getLogger(__name__)
+
+
 
 class LLMManager:
     """Represent a pool of models"""
@@ -44,7 +48,18 @@ class LLMManager:
             items = session.execute(stmt)
 
             for (item,) in items:
-                self._models[item.name] = deserialize(item.spec, safe=False)
+                
+                try:
+                    self._models[item.name] = deserialize(item.spec, safe=False)
+                except ImportError  as e:
+                    # Optional provider dependency not installed (e.g., langchain-ollama)
+                    logger.warning("Skipping LLM '%s' due to missing dependency: %s", item.name, e)
+                    continue
+                except Exception as e:
+                    # Any other model init error (bad config, incompatible versions, etc.)
+                    logger.warning("Skipping LLM '%s' due to init error: %s", item.name, e)
+                    continue
+
                 self._info[item.name] = {
                     "name": item.name,
                     "spec": item.spec,

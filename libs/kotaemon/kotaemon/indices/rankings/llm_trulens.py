@@ -142,10 +142,12 @@ class LLMTrulensScoring(LLMReranking):
                         )
                     )
 
-                    def llm_call():
-                        return self.llm(messages).text
+                    # Pass messages as parameter to avoid closure variable capture
+                    # which causes context ID collisions in concurrent execution
+                    def llm_call(msgs):
+                        return self.llm(msgs).text
 
-                    futures.append(executor.submit(llm_call))
+                    futures.append(executor.submit(llm_call, messages))
 
                 results = [future.result() for future in futures]
         else:

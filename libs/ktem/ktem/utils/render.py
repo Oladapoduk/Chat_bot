@@ -95,24 +95,36 @@ class Render:
             print("Fail to extract page number")
             return html_content
 
+        # ✅ ALWAYS initialise this so it's never undefined
+        phrase = "true"
+
         if not highlight_text:
             try:
-                lang = detect(text.replace("\n", " "))["lang"]
-                if lang not in ["ja", "cn"]:
-                    highlight_words = [
-                        t[:-1] if t.endswith("-") else t for t in text.split("\n")
-                    ]
-                    highlight_text = highlight_words[0]
-                    phrase = "true"
+                # ✅ fast_langdetect.detect() may return a list OR a dict
+                det = detect(text.replace("\n", " "))
+                if isinstance(det, list) and det:
+                    lang = det[0].get("lang")
+                elif isinstance(det, dict):
+                    lang = det.get("lang")
                 else:
-                    phrase = "false"
+                    lang = None
 
-                highlight_text = (
-                    text.replace("\n", "").replace('"', "").replace("'", "")
-                )
+                # ✅ phrase flag based on language
+                if lang in ["ja", "cn"]:
+                    phrase = "false"
+                else:
+                    phrase = "true"
+
+                # ✅ choose a reasonable search string
+                clean_text = text.replace("\n", " ").replace('"', "").replace("'", "").strip()
+                if clean_text:
+                    highlight_text = clean_text[:300]  # keep it short-ish for URL/data-attr
+                else:
+                    highlight_text = ""
             except Exception as e:
                 print(e)
-                highlight_text = text
+                highlight_text = (text or "").replace("\n", " ").replace('"', "").replace("'", "")[:300]
+                phrase = "true"
         else:
             phrase = "true"
 
@@ -122,6 +134,7 @@ class Render:
             [Preview]
         </a>
         """  # noqa
+
 
     @staticmethod
     def highlight(text: str, elem_id: str | None = None) -> str:

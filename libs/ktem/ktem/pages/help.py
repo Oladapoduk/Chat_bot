@@ -95,8 +95,11 @@ class HelpPage:
             # try retrieve from cache
             changelogs = ""
 
-            if (self.changelogs_cache_dir / f"{version}.md").exists():
-                with open(self.changelogs_cache_dir / f"{version}.md", "r") as fi:
+            if (self.changelogs_cache_dir / f"{self.app_version}.md").exists():
+
+
+                
+                with open(self.changelogs_cache_dir / f"{self.app_version}.md", "r", encoding="utf-8") as fi:
                     changelogs = fi.read()
             else:
                 release_url_base = (
@@ -109,9 +112,7 @@ class HelpPage:
                 # cache the changelogs
                 if not self.changelogs_cache_dir.exists():
                     self.changelogs_cache_dir.mkdir(parents=True, exist_ok=True)
-                with open(
-                    self.changelogs_cache_dir / f"{self.app_version}.md", "w"
-                ) as fi:
+                with open(self.changelogs_cache_dir / f"{self.app_version}.md", "w", encoding="utf-8", errors="replace") as fi:
                     fi.write(changelogs)
 
             if changelogs:
