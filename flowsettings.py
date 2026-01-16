@@ -16,7 +16,7 @@ this_dir = Path(this_file).parent
 # change this if your app use a different name
 KH_PACKAGE_NAME = "kotaemon_app"
 KH_APP_NAME = "Moat-Chat Bot"
-KH_FAVICON_PATH = str(this_dir / "libs" / "ktem" / "ktem" / "assets" / "img" / "moat.jpg")
+KH_FAVICON_PATH = str(this_dir / "libs" / "ktem" / "ktem" / "assets" / "img" / "moat.png")
 
 KH_APP_VERSION = config("KH_APP_VERSION", None)
 if not KH_APP_VERSION:
