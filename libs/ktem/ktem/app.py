@@ -61,7 +61,9 @@ class BaseApp:
         with (dir_assets / "js" / "svg-pan-zoom.min.js").open() as fi:
             self._svg_js = fi.read()
 
-        self._favicon = str(dir_assets / "img" / "favicon.svg")
+        self._favicon = getattr(
+            settings, "KH_FAVICON_PATH", str(dir_assets / "img" / "favicon.svg")
+        )
 
         self.default_settings = SettingGroup(
             application=BaseSettingGroup(settings=settings.SETTINGS_APP),
