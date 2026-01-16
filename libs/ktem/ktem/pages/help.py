@@ -58,7 +58,7 @@ class HelpPage:
                 f"{self.remote_content_url}/v{self.app_version}/docs/about.md"
             )
         if about_md:
-            with gr.Accordion("About"):
+            with gr.Accordion("Moat-Homes Chat-Bot"):
                 if self.app_version:
                     about_md = f"Version: {self.app_version}\n\n{about_md}"
                 gr.Markdown(about_md)
