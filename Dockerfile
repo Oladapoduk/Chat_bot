@@ -12,7 +12,8 @@ RUN apt-get update -qqy && \
         libpoppler-dev \
         unzip \
         curl \
-        cargo
+        cargo \
+        zstd
 
 # Setup args
 ARG TARGETPLATFORM
@@ -86,7 +87,9 @@ RUN --mount=type=ssh  \
 ENV USE_LIGHTRAG=true
 RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \
-    pip install aioboto3 nano-vectordb ollama xxhash "lightrag-hku<=1.3.0"
+    pip install aioboto3 nano-vectordb ollama xxhash "lightrag-hku==1.4.9.11" "nano-graphrag==0.0.8.2" \
+    && pip uninstall -y hnswlib \
+    && pip install "chroma-hnswlib==0.7.6" "chromadb==0.5.16" --force-reinstall
 
 RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \

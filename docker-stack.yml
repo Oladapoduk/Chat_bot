@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  moat-bot:
+    image: moat-bot:latest
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      # Map the local ktem_app_data directory to the container
+      # This ensures your existing uploads and indices are visible in Docker
+      - ./ktem_app_data:/app/ktem_app_data
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+      - KH_APP_DATA_DIR=/app/ktem_app_data
+      # Pass through necessary API keys. 
+      # In production, use Docker Secrets. For simplicity here, we use env vars.
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        reservations:
+          memory: 4G
+
+# volumes:
+#   ktem_app_data:

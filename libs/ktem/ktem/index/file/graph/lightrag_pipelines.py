@@ -3,8 +3,9 @@ import glob
 import logging
 import os
 import re
+import threading
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
 import numpy as np
 import pandas as pd
@@ -98,6 +99,149 @@ filestorage_path = Path(settings.KH_FILESTORAGE_PATH) / "lightrag"
 filestorage_path.mkdir(parents=True, exist_ok=True)
 
 INDEX_BATCHSIZE = 4
+
+
+# Thread-local storage for event loop management
+# This ensures each thread has its own persistent event loop to avoid
+# "Lock is bound to a different event loop" errors with LightRAG
+_thread_local = threading.local()
+
+# Track the event loop ID that LightRAG shared storage was initialized with
+_lightrag_loop_id: Optional[int] = None
+
+
+def _reset_lightrag_shared_storage():
+    """Reset LightRAG's shared storage to allow reinitialization with a new event loop.
+
+    LightRAG's shared_storage module creates asyncio.Lock objects that are bound to
+    a specific event loop. When the event loop changes (e.g., from a previous call),
+    we must reset the shared storage so new locks can be created in the new loop.
+    """
+    global _lightrag_loop_id
+
+    if not LIGHTRAG_AVAILABLE:
+        return
+
+    try:
+        from lightrag.kg import shared_storage
+
+        # Reset all the module-level variables that hold locks
+        shared_storage._initialized = None
+        shared_storage._internal_lock = None
+        shared_storage._data_init_lock = None
+        shared_storage._storage_keyed_lock = None
+        shared_storage._async_locks = None
+        shared_storage._shared_dicts = None
+        shared_storage._init_flags = None
+        shared_storage._update_flags = None
+        shared_storage._is_multiprocess = None
+        shared_storage._manager = None
+        shared_storage._lock_registry = None
+        shared_storage._lock_registry_count = None
+        shared_storage._lock_cleanup_data = None
+        shared_storage._registry_guard = None
+        shared_storage._default_workspace = None
+
+        _lightrag_loop_id = None
+        logging.debug("Reset LightRAG shared storage for new event loop")
+    except Exception as e:
+        logging.warning(f"Could not reset LightRAG shared storage: {e}")
+
+
+def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
+    """Get or create a persistent event loop for the current thread.
+
+    This is necessary because LightRAG's shared_storage module creates asyncio.Lock
+    objects that are bound to the event loop active at creation time. Using asyncio.run()
+    creates a new event loop each time, which causes "Lock is bound to a different
+    event loop" errors when the locks are reused.
+
+    By maintaining a persistent event loop per thread, we ensure all LightRAG operations
+    use the same loop and avoid lock binding issues.
+    """
+    global _lightrag_loop_id
+
+    loop = getattr(_thread_local, 'event_loop', None)
+
+    if loop is None or loop.is_closed():
+        # If we had a previous loop that's now closed/gone, reset LightRAG storage
+        if _lightrag_loop_id is not None:
+            _reset_lightrag_shared_storage()
+
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _thread_local.event_loop = loop
+        _thread_local.lightrag_initialized = False
+        logging.debug(f"Created new event loop for thread {threading.current_thread().name}")
+
+    return loop
+
+
+def _ensure_lightrag_initialized_sync(loop: asyncio.AbstractEventLoop):
+    """Ensure LightRAG shared storage is initialized in the given event loop (sync version).
+
+    This must be called BEFORE running any async code in the loop to ensure
+    the shared storage locks are created in the correct event loop context.
+    """
+    global _lightrag_loop_id
+
+    current_loop_id = id(loop)
+
+    # Check if we need to reinitialize due to loop change
+    if _lightrag_loop_id is not None and _lightrag_loop_id != current_loop_id:
+        logging.debug(f"Event loop changed from {_lightrag_loop_id} to {current_loop_id}, resetting LightRAG")
+        _reset_lightrag_shared_storage()
+
+    if _lightrag_loop_id == current_loop_id:
+        return  # Already initialized for this loop
+
+    # Initialize the shared storage for single-process mode
+    if LIGHTRAG_AVAILABLE:
+        try:
+            from lightrag.kg import shared_storage
+            if not shared_storage._initialized:
+                # Set the event loop before initializing so locks are created in the right loop
+                asyncio.set_event_loop(loop)
+                shared_storage.initialize_share_data(workers=1)
+                _lightrag_loop_id = current_loop_id
+                logging.debug(f"Initialized LightRAG shared storage for loop {current_loop_id}")
+        except Exception as e:
+            logging.warning(f"Could not initialize LightRAG shared storage: {e}")
+
+
+async def _ensure_lightrag_initialized():
+    """Ensure LightRAG shared storage is initialized in the current event loop.
+
+    This must be called within an async context running in the thread's event loop.
+    """
+    global _lightrag_loop_id
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    current_loop_id = id(loop)
+
+    # Check if we need to reinitialize due to loop change
+    if _lightrag_loop_id is not None and _lightrag_loop_id != current_loop_id:
+        logging.debug(f"Event loop changed from {_lightrag_loop_id} to {current_loop_id}, resetting LightRAG")
+        _reset_lightrag_shared_storage()
+
+    if _lightrag_loop_id == current_loop_id:
+        return  # Already initialized for this loop
+
+    # Initialize the shared storage for single-process mode
+    if LIGHTRAG_AVAILABLE:
+        try:
+            from lightrag.kg import shared_storage
+            if not shared_storage._initialized:
+                shared_storage.initialize_share_data(workers=1)
+                _lightrag_loop_id = current_loop_id
+                logging.debug(f"Initialized LightRAG shared storage for loop {current_loop_id}")
+        except Exception as e:
+            logging.warning(f"Could not initialize LightRAG shared storage: {e}")
 
 
 def get_llm_func(model):
@@ -413,43 +557,46 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
             ),
         )
 
-        # Initialize GraphRAG and run insert in a persistent loop to handle locks correctly
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            # Create and initialize GraphRAG inside the loop
-            async def init_graphrag():
-                g = build_graphrag(
-                    input_path,
-                    llm_func=llm_func,
-                    embedding_func=embedding_func,
-                )
-                if hasattr(g, 'initialize_storages'):
-                    await g.initialize_storages()
-                if 'initialize_pipeline_status' in globals():
-                    await initialize_pipeline_status()
-                return g
-                
-            graphrag_func = loop.run_until_complete(init_graphrag())
+        # Use persistent event loop to avoid "Lock is bound to a different event loop" errors
+        # LightRAG's shared storage creates asyncio.Lock objects that are bound to a specific
+        # event loop. Creating new loops causes lock binding issues on subsequent queries.
+        loop = _get_or_create_event_loop()
 
-            for doc_id in range(0, len(all_docs), self.index_batch_size):
-                cur_docs = all_docs[doc_id : doc_id + self.index_batch_size]
-                combined_doc = "\n".join(cur_docs)
+        # Initialize LightRAG shared storage BEFORE entering async context
+        # This ensures locks are created in the correct event loop
+        _ensure_lightrag_initialized_sync(loop)
 
-                # Use ainsert (async) to keep using the same loop and locks
-                loop.run_until_complete(graphrag_func.ainsert(combined_doc))
-                
-                process_doc_count += len(cur_docs)
-                yield Document(
-                    channel="debug",
-                    text=(
-                        f"[GraphRAG] {'Updated' if is_incremental else 'Indexed'} "
-                        f"{process_doc_count} / {total_docs} documents."
-                    ),
-                )
-        finally:
-            loop.close()
+        # Create and initialize GraphRAG inside the loop
+        async def init_graphrag():
+            g = build_graphrag(
+                input_path,
+                llm_func=llm_func,
+                embedding_func=embedding_func,
+            )
+            if hasattr(g, 'initialize_storages'):
+                await g.initialize_storages()
+            if 'initialize_pipeline_status' in globals():
+                await initialize_pipeline_status()
+            return g
+
+        graphrag_func = loop.run_until_complete(init_graphrag())
+
+        for doc_id in range(0, len(all_docs), self.index_batch_size):
+            cur_docs = all_docs[doc_id : doc_id + self.index_batch_size]
+            combined_doc = "\n".join(cur_docs)
+
+            # Use ainsert (async) to keep using the same loop and locks
+            loop.run_until_complete(graphrag_func.ainsert(combined_doc))
+
+            process_doc_count += len(cur_docs)
+            yield Document(
+                channel="debug",
+                text=(
+                    f"[GraphRAG] {'Updated' if is_incremental else 'Indexed'} "
+                    f"{process_doc_count} / {total_docs} documents."
+                ),
+            )
+        # Note: Do NOT close the loop - it needs to persist for subsequent queries
 
         yield Document(
             channel="debug",
@@ -561,27 +708,30 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         graph_id = self._get_graph_id()
         _, input_path = prepare_graph_index_path(graph_id)
         input_path.mkdir(parents=True, exist_ok=True)
-        
+
         llm_func, embedding_func, _, _ = get_default_models_wrapper()
-        
+
         query_params = QueryParam(mode=self.search_type, only_need_context=True)
         print("search_type", self.search_type)
 
         async def _async_run():
+            # Ensure LightRAG shared storage is initialized in the current event loop
+            await _ensure_lightrag_initialized()
+
             # Build and initialize GraphRAG inside the async loop
             graphrag_func = build_graphrag(
                 input_path,
                 llm_func=llm_func,
                 embedding_func=embedding_func,
             )
-            
+
             # Initialize storages
             if hasattr(graphrag_func, 'initialize_storages'):
                 await graphrag_func.initialize_storages()
-            
+
             if 'initialize_pipeline_status' in globals():
                 await initialize_pipeline_status()
-                
+
             # Perform query
             if query_params.mode == "local":
                 entities, relationships, sources = await lightrag_build_local_query_context(
@@ -608,7 +758,7 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
                 # If we are already running in a loop, we can't use run_until_complete.
                 # We need to find the async query method.
                 # If unavailable, we might have to use a thread executor.
-                
+
                 # Try to use internal async query logic if exposed?
                 # Fallback: run in thread to escape loop
                 context = await asyncio.to_thread(graphrag_func.query, text, query_params)
@@ -629,5 +779,13 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
                 ]
                 return documents
 
-        # Run the async wrapper
-        return asyncio.run(_async_run())
+        # Use persistent event loop to avoid "Lock is bound to a different event loop" errors
+        # asyncio.run() creates a new event loop each time, which causes issues with
+        # LightRAG's shared storage locks that are bound to a specific event loop
+        loop = _get_or_create_event_loop()
+
+        # Initialize LightRAG shared storage BEFORE entering async context
+        # This ensures locks are created in the correct event loop
+        _ensure_lightrag_initialized_sync(loop)
+
+        return loop.run_until_complete(_async_run())
