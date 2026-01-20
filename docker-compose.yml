@@ -1,0 +1,88 @@
+# =============================================================================
+# Docker Compose for Local Development and Testing
+# Moat-Chat Bot Application
+# =============================================================================
+#
+# Usage:
+#   docker-compose up --build        # Build and start
+#   docker-compose up -d             # Start in detached mode
+#   docker-compose logs -f           # Follow logs
+#   docker-compose down              # Stop and remove containers
+#
+# =============================================================================
+
+version: '3.8'
+
+services:
+  moat-chat-bot:
+    container_name: moat-chat-bot
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+      args:
+        - TARGETARCH=amd64
+    image: moat-chat-bot:latest
+
+    ports:
+      - "7860:7860"
+
+    # Mount local .env file for configuration
+    env_file:
+      - .env
+
+    environment:
+      # Server configuration
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+      - GR_FILE_ROOT_PATH=/app
+
+      # Application data directory
+      - KH_APP_DATA_DIR=/app/ktem_app_data
+
+      # Enable LightRAG
+      - USE_LIGHTRAG=true
+
+      # Override specific settings if needed (these take precedence over .env)
+      # Uncomment and modify as needed:
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      # - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+
+    volumes:
+      # Bind mount for persistent data - syncs with local ktem_app_data
+      - ./ktem_app_data:/app/ktem_app_data
+
+      # Optional: Mount .env file directly (alternative to env_file)
+      # - ./.env:/app/.env:ro
+
+    # Health check configuration
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Resource limits for local development
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Optional: Define network for multi-container setups
+networks:
+  default:
+    name: moat-chat-network
+    driver: bridge

@@ -1,31 +1,167 @@
+# =============================================================================
+# Docker Stack for High-Availability Swarm Deployment
+# Moat-Chat Bot Application
+# =============================================================================
+#
+# Deployment Commands:
+#   docker stack deploy -c docker-stack.yml moat-chat
+#   docker stack services moat-chat
+#   docker stack ps moat-chat
+#   docker stack rm moat-chat
+#
+# Prerequisites:
+#   1. Docker Swarm initialized: docker swarm init
+#   2. Image built and available: docker build -f Dockerfile.optimized -t moat-chat-bot:latest .
+#   3. For multi-node clusters, push image to registry first
+#
+# =============================================================================
+
 version: '3.8'
 
 services:
-  moat-bot:
-    image: moat-bot:latest
-    build: .
+  moat-chat-bot:
+    image: moat-chat-bot:latest
+
     ports:
-      - "7860:7860"
-    volumes:
-      # Map the local ktem_app_data directory to the container
-      # This ensures your existing uploads and indices are visible in Docker
-      - ./ktem_app_data:/app/ktem_app_data
+      - target: 7860
+        published: 7860
+        protocol: tcp
+        mode: ingress
+
+    # Environment configuration
+    # The .env file is read at deploy time - use env_file in compose,
+    # but for stack deploy, variables must be passed explicitly or use configs/secrets
     environment:
+      # Server configuration
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7860
+      - GR_FILE_ROOT_PATH=/app
+
+      # Application data directory
       - KH_APP_DATA_DIR=/app/ktem_app_data
-      # Pass through necessary API keys. 
-      # In production, use Docker Secrets. For simplicity here, we use env vars.
+
+      # Enable LightRAG
+      - USE_LIGHTRAG=true
+
+      # API Keys - Use Docker Secrets in production (see secrets section below)
+      # For now, pass via environment variables from .env
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      - OPENAI_CHAT_MODEL=${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      - OPENAI_EMBEDDINGS_MODEL=${OPENAI_EMBEDDINGS_MODEL:-text-embedding-3-large}
+
+      # Azure OpenAI (optional)
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - OPENAI_API_VERSION=${OPENAI_API_VERSION:-2024-02-15-preview}
+      - AZURE_OPENAI_CHAT_DEPLOYMENT=${AZURE_OPENAI_CHAT_DEPLOYMENT:-}
+      - AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT=${AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT:-}
+
+      # GraphRAG settings
+      - GRAPHRAG_API_KEY=${GRAPHRAG_API_KEY:-}
+      - GRAPHRAG_LLM_MODEL=${GRAPHRAG_LLM_MODEL:-gpt-4o-mini}
+      - GRAPHRAG_EMBEDDING_MODEL=${GRAPHRAG_EMBEDDING_MODEL:-text-embedding-3-small}
+
+    volumes:
+      # Bind mount for data persistence - syncs with host ktem_app_data directory
+      # IMPORTANT: Ensure this directory exists on all swarm nodes or use shared storage
+      - type: bind
+        source: ./ktem_app_data
+        target: /app/ktem_app_data
+
+    # High-Availability deployment configuration
     deploy:
-      replicas: 1
+      mode: replicated
+      replicas: 2
+
+      # Update configuration for zero-downtime deployments
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        monitor: 60s
+        order: start-first
+
+      # Rollback configuration
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: pause
+        order: stop-first
+
+      # Restart policy
       restart_policy:
         condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+
+      # Resource constraints
       resources:
+        limits:
+          memory: 8G
+          cpus: '4'
         reservations:
           memory: 4G
+          cpus: '2'
 
-# volumes:
-#   ktem_app_data:
+      # Placement constraints (optional - customize for your cluster)
+      # placement:
+      #   constraints:
+      #     - node.role == worker
+      #     - node.labels.type == application
+
+      # Health check for container orchestration
+      # This enables Swarm to detect unhealthy containers and replace them
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        labels: "service,environment"
+        env: "NODE_ID"
+
+    # Network configuration
+    networks:
+      - moat-chat-network
+
+# Network definition for service communication
+networks:
+  moat-chat-network:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      encrypted: "true"
+
+# =============================================================================
+# Docker Secrets Configuration (Recommended for Production)
+# =============================================================================
+# To use secrets instead of environment variables:
+#
+# 1. Create secrets:
+#    echo "your-api-key" | docker secret create openai_api_key -
+#    echo "your-azure-key" | docker secret create azure_openai_api_key -
+#
+# 2. Uncomment the secrets section below and in the service
+#
+# secrets:
+#   openai_api_key:
+#     external: true
+#   azure_openai_api_key:
+#     external: true
+#
+# 3. In the service, add:
+#    secrets:
+#      - openai_api_key
+#      - azure_openai_api_key
+#
+# 4. Update application to read from /run/secrets/openai_api_key
+# =============================================================================

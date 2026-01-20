@@ -1,0 +1,148 @@
+# =============================================================================
+# Optimized Multi-Stage Dockerfile for Moat-Chat Bot
+# Designed for High-Availability Cluster Deployment
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Builder - Install dependencies and build artifacts
+# -----------------------------------------------------------------------------
+FROM python:3.10-slim AS builder
+
+RUN set -eux; \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30; \
+    apt-get install -y --no-install-recommends \
+        git \
+        gcc \
+        g++ \
+        cargo \
+        curl; \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# IMPORTANT: use /app so editable installs point to /app/libs/... (same as runtime)
+WORKDIR /app
+
+# Copy only pyproject files first for better layer caching
+COPY libs/kotaemon/pyproject.toml libs/kotaemon/
+COPY libs/ktem/pyproject.toml libs/ktem/
+
+# Copy libs source
+COPY libs/ libs/
+
+# Create and use venv
+RUN python -m venv /opt/venv
+ENV VIRTUAL_ENV="/opt/venv"
+ENV PATH="/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ARG INSTALL_PDFSERVICES=false
+
+# Install core deps (editable installs now use absolute paths under /app)
+RUN pip install --upgrade pip wheel setuptools && \
+    pip install -e "/app/libs/kotaemon[adv]" && \
+    pip install -e "/app/libs/ktem" && \
+    if [ "$INSTALL_PDFSERVICES" = "true" ]; then \
+        pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"; \
+    fi
+
+# PyTorch CPU wheels
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Advanced features and LightRAG
+RUN pip install "unstructured[all-docs]" && \
+    pip install aioboto3 nano-vectordb ollama xxhash "lightrag-hku==1.4.9.11" "nano-graphrag==0.0.8.2" && \
+    pip install "hnswlib==0.8.0" && \
+    pip install "chroma-hnswlib==0.7.6" "chromadb==0.5.16" --force-reinstall && \
+    pip install "docling<=2.5.2"
+
+# Force versions compatible with kotaemon + gradio + llama-index
+RUN pip install --no-cache-dir --upgrade \
+    "openai<2" \
+    "fastapi<=0.112.1" \
+    "pydantic<=2.10.6" \
+    "python-dotenv<1.1" \
+    "tenacity<8.3" \
+    "umap-learn==0.5.5" \
+    "websockets<12" \
+    "numpy<2" \
+    "pillow<11"
+
+# Warm import (optional)
+RUN python -c "from llama_index.core.readers.base import BaseReader" 2>/dev/null || true
+
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime - Minimal production image
+# -----------------------------------------------------------------------------
+FROM python:3.10-slim AS runtime
+
+RUN set -eux; \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30; \
+    apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        libsm6 \
+        libxext6 \
+        ffmpeg \
+        libmagic1 \
+        libreoffice; \
+    rm -rf /var/lib/apt/lists/*
+
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=UTF-8 \
+    USE_LIGHTRAG=true \
+    GRADIO_SERVER_NAME=0.0.0.0 \
+    GRADIO_SERVER_PORT=7860
+
+# Copy venv from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Make venv the default interpreter everywhere
+ENV VIRTUAL_ENV="/opt/venv"
+ENV PATH="/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Ensure RUN commands use bash and see PATH consistently
+ 
+SHELL ["/bin/bash", "-c"]
+
+
+WORKDIR /app
+
+# Copy application source code (includes /app/libs/...)
+COPY . /app
+
+# Sanity check at build time: python + ktem must import
+RUN echo "PATH=$PATH" && \
+    ls -la /opt/venv/bin/python && \
+    /opt/venv/bin/python -V && \
+    /opt/venv/bin/python -c "import ktem; print(ktem.__file__)"
+
+
+# Option A (prebuilt PDF.js): don't download; just point to the folder
+ENV PDFJS_PREBUILT_DIR="/app/libs/ktem/ktem/assets/prebuilt/pdfjs-dist"
+
+# Create non-root user for security
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser && \
+    mkdir -p /app/ktem_app_data && \
+    chown -R appuser:appgroup /app
+
+ENV GR_FILE_ROOT_PATH="/app" \
+    KH_APP_DATA_DIR="/app/ktem_app_data"
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:7860/ || exit 1
+
+ 
+ENTRYPOINT ["/bin/bash", "/app/launch.sh"]
+
