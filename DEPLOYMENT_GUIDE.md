@@ -106,6 +106,22 @@ cp .env.template .env
 nano .env
 ```
 
+**IMPORTANT: Obtaining API Credentials**
+
+The application requires LLM API keys to function. These credentials are **NOT** included in the repository for security reasons.
+
+**Azure OpenAI Credentials (Recommended for this deployment):**
+- Contact the development team to obtain:
+  - `AZURE_OPENAI_ENDPOINT`
+  - `AZURE_OPENAI_API_KEY`
+- These will be shared via secure channel (password manager, encrypted email, or in-person)
+- Alternatively, provision your own Azure OpenAI resource from Azure Portal
+
+**Alternative: Use OpenAI (if Azure not available):**
+- Sign up at https://platform.openai.com/
+- Generate API key at https://platform.openai.com/api-keys
+- Add to `.env` as `OPENAI_API_KEY`
+
 **Minimum required configuration** - Add at least ONE LLM provider:
 
 ```bash
@@ -136,13 +152,30 @@ Choose one of the deployment methods below:
 
 ```bash
 # Build and start the application
+# Note: This will automatically build the Docker image if it doesn't exist
 docker-compose up -d
 
-# View logs
+# View logs (to monitor startup progress)
 docker-compose logs -f
 
 # Access the application
 # Open browser: http://localhost:7860
+```
+
+**What happens during first deployment:**
+1. Docker reads `docker-compose.yml`
+2. Checks if image `moat-chat-bot:latest` exists locally
+3. If NOT found, automatically builds from `Dockerfile.optimized` (takes ~5-10 minutes first time)
+4. Starts the container
+5. Application initializes and becomes available on port 7860
+
+**For subsequent restarts:**
+```bash
+# Use existing image (fast restart)
+docker-compose restart
+
+# Or rebuild if code changed
+docker-compose up -d --build
 ```
 
 #### **Option B: High-Availability Deployment (Production)**
