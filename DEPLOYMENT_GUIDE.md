@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Last Updated:** January 2026
-**Repository:** https://github.com/Oladapoduk/Chat_bot
+**Repository:** https://bitbucket.org/moatdevelopers/moat-policy-chat-bot
 **Application:** Moat-Chat Bot (RAG-based Document QA System)
 
 ---
@@ -321,7 +321,7 @@ Create a summary document for the infrastructure team:
 
 ## Support Contacts
 - Technical Questions: [Your Email]
-- GitHub Issues: https://github.com/Oladapoduk/Chat_bot/issues
+- Bitbucket Repository: https://bitbucket.org/moatdevelopers/moat-policy-chat-bot
 - Upstream Documentation: https://cinnamon.github.io/kotaemon/
 ```
 
@@ -871,7 +871,7 @@ Email: [Backup Email]
 - Deployment Guide: This document
 - User Guide: https://cinnamon.github.io/kotaemon/
 - Developer Guide: https://cinnamon.github.io/kotaemon/development/
-- GitHub Issues: https://github.com/Oladapoduk/Chat_bot/issues
+- Bitbucket Repository: https://bitbucket.org/moatdevelopers/moat-policy-chat-bot
 
 **Upstream Project:**
 - Original Project: https://github.com/Cinnamon/kotaemon
