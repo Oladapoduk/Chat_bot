@@ -81,248 +81,126 @@ Moat-Chat Bot is a Retrieval-Augmented Generation (RAG) web application that all
 
 ---
 
-## 3. Step-by-Step Packaging Instructions
+## 3. Getting Started - Quick Deployment
 
-### Step 1: Prepare the Deployment Package
+The code is already available in the Bitbucket repository. Follow these steps to deploy:
 
-Create a deployment package containing all necessary files:
-
-```bash
-# Navigate to project root
-cd c:\Users\BabajO\Documents\Kotaemon_new_laptop\Git_method\kotaemon
-
-# Create deployment package directory
-mkdir deployment_package
-```
-
-#### Files to Include in Package:
-
-**Critical Files (MUST include):**
-```
-deployment_package/
-├── Dockerfile.optimized          # Production Docker image definition
-├── docker-compose.yml            # Single-node deployment config
-├── docker-stack.yml              # Docker Swarm HA deployment config
-├── launch.sh                     # Container entrypoint script
-├── .env.template                 # Environment variables template (see below)
-├── .dockerignore                 # Build optimization
-├── flowsettings.py               # Application configuration
-├── app.py                        # Main application entry point
-├── sso_app.py                    # SSO-enabled entry point (if needed)
-├── requirements.txt              # Python dependencies (if exists)
-└── libs/                         # Core application libraries
-    ├── kotaemon/                 # RAG framework
-    └── ktem/                     # Web UI and database models
-```
-
-**Documentation Files (RECOMMENDED):**
-```
-deployment_package/
-├── README.md                     # Project overview
-├── DEPLOYMENT_GUIDE.md           # This file
-├── CUSTOM_SETUP.md               # Customization notes
-└── docs/                         # User and developer guides
-```
-
-**Scripts (OPTIONAL but helpful):**
-```
-deployment_package/
-└── scripts/
-    ├── download_pdfjs.sh         # PDF.js library download
-    └── deploy.ps1                # Windows deployment automation
-```
-
-### Step 2: Create Environment Template
-
-Create `.env.template` file (DO NOT include actual API keys):
+### Step 1: Clone the Repository
 
 ```bash
-# Copy your .env file and remove sensitive values
-cp .env .env.template
-
-# Edit .env.template and replace all API keys with placeholders
+# Clone from Bitbucket
+git clone https://bitbucket.org/moatdevelopers/moat-policy-chat-bot.git
+cd moat-policy-chat-bot
 ```
 
-**`.env.template` content:**
+### Step 2: Configure Environment Variables
+
+Create your `.env` file with the required API keys:
+
 ```bash
-# LLM Configuration (REQUIRED - at least one provider)
+# Create .env file from template
+cp .env.template .env
+
+# Edit .env and add your API keys
+# Use your preferred text editor (nano, vim, notepad, etc.)
+nano .env
+```
+
+**Minimum required configuration** - Add at least ONE LLM provider:
+
+```bash
+# Option 1: OpenAI (Recommended)
+OPENAI_API_KEY=sk-proj-your-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_API_KEY=<YOUR_OPENAI_API_KEY_HERE>
 OPENAI_CHAT_MODEL=gpt-4o-mini
 OPENAI_EMBEDDINGS_MODEL=text-embedding-3-large
 
-# Azure OpenAI (Alternative to OpenAI)
-AZURE_OPENAI_ENDPOINT=<YOUR_AZURE_ENDPOINT_HERE>
-AZURE_OPENAI_API_KEY=<YOUR_AZURE_API_KEY_HERE>
+# Option 2: Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-key-here
 OPENAI_API_VERSION=2024-08-01-preview
 AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT=text-embedding-3-large
 
-# Local Models (Alternative - requires Ollama running)
+# Option 3: Local Models (requires Ollama server)
 LOCAL_MODEL=qwen2.5:7b
 LOCAL_MODEL_EMBEDDINGS=nomic-embed-text
 KH_OLLAMA_URL=http://localhost:11434/v1/
-
-# GraphRAG Configuration (Optional - enables graph-based retrieval)
-GRAPHRAG_API_KEY=<YOUR_OPENAI_API_KEY_HERE>
-GRAPHRAG_LLM_MODEL=gpt-4o-mini
-GRAPHRAG_EMBEDDING_MODEL=text-embedding-3-small
-USE_CUSTOMIZED_GRAPHRAG_SETTING=false
-
-# Document Processing (Optional - for advanced PDF processing)
-AZURE_DI_ENDPOINT=
-AZURE_DI_CREDENTIAL=
-PDF_SERVICES_CLIENT_ID=
-PDF_SERVICES_CLIENT_SECRET=
-
-# Authentication (Optional - currently disabled)
-AUTHENTICATION_METHOD=
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-KEYCLOAK_SERVER_URL=
-KEYCLOAK_CLIENT_ID=
-KEYCLOAK_REALM=
-KEYCLOAK_CLIENT_SECRET=
-
-# PDF.js Configuration
-PDFJS_VERSION_DIST=pdfjs-4.0.379-dist
 ```
 
-### Step 3: Export Docker Image (Option A - Recommended for Air-Gapped Environments)
+### Step 3: Deploy the Application
 
-If your infrastructure team needs to deploy in an environment without internet access or a private registry:
+Choose one of the deployment methods below:
+
+#### **Option A: Single-Node Deployment (Development/Small Teams)**
 
 ```bash
-# Save the Docker image to a tar file
-docker save moat-chat-bot:latest -o deployment_package/moat-chat-bot-latest.tar
+# Build and start the application
+docker-compose up -d
 
-# Compress the image (optional but recommended - saves ~50% size)
-gzip deployment_package/moat-chat-bot-latest.tar
-# This creates: moat-chat-bot-latest.tar.gz (~1-2GB depending on image)
+# View logs
+docker-compose logs -f
+
+# Access the application
+# Open browser: http://localhost:7860
 ```
 
-**Load image on target server:**
-```bash
-# On deployment server
-docker load -i moat-chat-bot-latest.tar.gz
-```
-
-### Step 4: Push to Container Registry (Option B - Recommended for Cloud/Connected Environments)
-
-If your infrastructure team has a private Docker registry:
+#### **Option B: High-Availability Deployment (Production)**
 
 ```bash
-# Tag image for your registry
-docker tag moat-chat-bot:latest <your-registry>/moat-chat-bot:latest
-docker tag moat-chat-bot:latest <your-registry>/moat-chat-bot:v1.0
+# Initialize Docker Swarm (if not already done)
+docker swarm init
 
-# Push to registry
-docker login <your-registry>
-docker push <your-registry>/moat-chat-bot:latest
-docker push <your-registry>/moat-chat-bot:v1.0
+# Export environment variables from .env file
+export $(grep -v '^#' .env | xargs)
 
-# Update docker-compose.yml and docker-stack.yml with registry URL
-# Change: image: moat-chat-bot:latest
-# To: image: <your-registry>/moat-chat-bot:latest
+# Deploy the stack
+docker stack deploy -c docker-stack.yml moat-chat
+
+# Check deployment status
+docker stack services moat-chat
+docker stack ps moat-chat
+
+# Access the application
+# Open browser: http://<any-node-ip>:7860
 ```
 
-### Step 5: Create Deployment Instructions
-
-Create `DEPLOYMENT_INSTRUCTIONS.md` inside `deployment_package/`:
-
-```markdown
-# Quick Deployment Instructions
-
-## Prerequisites
-- Docker 20.10+ installed
-- Docker Compose 2.0+ installed (for single-node)
-- Docker Swarm initialized (for HA cluster)
-- Minimum 4GB RAM, 2 CPU cores, 20GB disk space
-- Outbound HTTPS access (for API calls to OpenAI/Azure)
-
-## Single-Node Deployment (Development/Small Teams)
-
-1. Extract deployment package
-2. Copy `.env.template` to `.env` and fill in API keys
-3. Run: `docker-compose up -d`
-4. Access: http://localhost:7860
-5. Check logs: `docker-compose logs -f`
-
-## High-Availability Deployment (Production Cluster)
-
-1. Initialize Docker Swarm: `docker swarm init`
-2. Extract deployment package on manager node
-3. Copy `.env.template` to `.env` and fill in API keys
-4. Export environment variables: `export $(grep -v '^#' .env | xargs)`
-5. Deploy stack: `docker stack deploy -c docker-stack.yml moat-chat`
-6. Check services: `docker stack services moat-chat`
-7. Access: http://<any-node-ip>:7860
-
-## Important Notes
-- Data is stored in `./ktem_app_data/` - MUST be backed up regularly
-- At least one LLM provider (OpenAI or Azure) must be configured
-- Default port 7860 - change in docker-compose.yml if needed
-```
-
-### Step 6: Create Package Archive
+### Step 4: Verify Deployment
 
 ```bash
-# Compress entire deployment package
-# Option 1: If image is included (large - 2-3GB)
-tar -czf moat-chat-bot-deployment-v1.0.tar.gz deployment_package/
+# Check if container is running
+docker ps | grep moat-chat
 
-# Option 2: If using registry (small - few MB)
-# Exclude the .tar.gz image file
-tar -czf moat-chat-bot-deployment-v1.0.tar.gz \
-  --exclude='deployment_package/*.tar.gz' \
-  deployment_package/
+# Check application health
+curl http://localhost:7860/
 
-# Calculate checksum for verification
-sha256sum moat-chat-bot-deployment-v1.0.tar.gz > moat-chat-bot-deployment-v1.0.tar.gz.sha256
+# View application logs
+docker logs <container-id>
+
+# Expected output: "Running on http://0.0.0.0:7860"
 ```
 
-### Step 7: Prepare Handoff Documentation
+### Step 5: First-Time Setup
 
-Create a summary document for the infrastructure team:
+1. **Access the web interface:** Open http://localhost:7860 in your browser
+2. **Upload a test document:** Click upload and select a PDF file
+3. **Ask a question:** Type a question about the document
+4. **Verify response:** Ensure the LLM responds with citations
 
-**`HANDOFF_SUMMARY.md`:**
-```markdown
-# Infrastructure Team Handoff - Moat-Chat Bot
+**That's it!** The application is now running and ready to use.
 
-**Prepared by:** [Your Name]
-**Date:** [Current Date]
-**Package:** moat-chat-bot-deployment-v1.0.tar.gz
-**Checksum:** [SHA256 from step 6]
+---
 
-## What's Included
-- Docker image (moat-chat-bot:latest)
-- Deployment configurations (docker-compose.yml, docker-stack.yml)
-- Environment template (.env.template)
-- Full documentation
+### Alternative: Building Custom Docker Image
 
-## Required Actions by Infra Team
-1. ✅ Provide LLM API keys (OpenAI or Azure OpenAI)
-2. ✅ Allocate persistent storage (minimum 50GB, recommend 100GB)
-3. ✅ Configure network access (inbound port 7860, outbound HTTPS)
-4. ✅ Set up backup schedule for `ktem_app_data/` directory
-5. ✅ Configure monitoring/health checks (endpoint: http://localhost:7860/)
+If you need to build the Docker image yourself (e.g., for customizations):
 
-## Deployment Timeline
-- Deployment time: ~15 minutes (single-node), ~30 minutes (HA cluster)
-- First startup: ~2-3 minutes (downloads models, initializes database)
+```bash
+# Build the optimized image
+docker build -f Dockerfile.optimized -t moat-chat-bot:latest .
 
-## Testing Validated
-✅ Image builds successfully
-✅ Application runs on localhost:7860
-✅ Document upload works
-✅ Chat with documents works
-✅ LLM integration tested with [OpenAI/Azure]
-✅ Data persistence verified across container restarts
-
-## Support Contacts
-- Technical Questions: [Your Email]
-- Bitbucket Repository: https://bitbucket.org/moatdevelopers/moat-policy-chat-bot
-- Upstream Documentation: https://cinnamon.github.io/kotaemon/
+# Then deploy using docker-compose or docker stack as shown above
+docker-compose up -d
 ```
 
 ---
